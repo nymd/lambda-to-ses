@@ -7,26 +7,25 @@ import (
 	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/aws"
-	"os"
 	"encoding/json"
 	"errors"
 	"net/http"
 )
 
 var (
-	EmailNotProvided = errors.New("no email provided")
-	MessageNotProvided = errors.New("no message provided")
+	SenderMissing = errors.New("Missing sender")
+	RecipientMissing = errors.New("Missing recipient")
+	SubjectMissing = errors.New("Missing subject")
+	TextMissing = errors.New("Missing body text")
+	HTMLMissing = errors.New("Missing body HTML")
 )
 
-const (
-	Success = "success"
-	Error = "error"
-)
-
-type ClientMessage struct {
-	Email string `json:"email"`
-	Name string `json:"name"`
-	Message string `json:"message"`
+type InboundMessage struct {
+	Sender string `json:"sender"`
+	Recipient string `json:"recipient"`
+	Subject string `json:"subject"`
+	Text string `json:"text"`
+	HTML string `json:"html"`
 }
 
 type ResponseMessage struct {
@@ -34,23 +33,15 @@ type ResponseMessage struct {
 	Message string `json:"message"`
 }
 
-var toEmail string
-var subject string
 var emailClient *ses.SES
+
 func init() {
-	toEmail = os.Getenv("TO_EMAIL")
-	subject = os.Getenv("SUBJECT")
-
-	if len(subject) < 0 {
-		subject = "Message from website"
-	}
-
-	emailClient = ses.New(session.New(), aws.NewConfig().WithRegion("eu-west-1"))
+	emailClient = ses.New(session.New(), aws.NewConfig().WithRegion("us-west-2"))
 }
 
 func ReturnErrorToUser(error error, status int) (events.APIGatewayProxyResponse, error) {
 	errorMessage, _ := json.Marshal(ResponseMessage{
-		Type: Error,
+		Type: "error",
 		Message: error.Error(),
 	})
 
@@ -67,32 +58,41 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 
 	body := request.Body
 
-	var message ClientMessage
+	var message InboundMessage
 	err := json.Unmarshal([]byte(body), &message)
 
 	if err != nil {
 		return ReturnErrorToUser(err, http.StatusInternalServerError)
-	} else if len(message.Email) < 1 {
-		return ReturnErrorToUser(EmailNotProvided, http.StatusBadRequest)
-	} else if len(message.Message) < 1 {
-		return ReturnErrorToUser(MessageNotProvided, http.StatusBadRequest)
+	} else if len(message.Sender) < 1 {
+		return ReturnErrorToUser(SenderMissing, http.StatusBadRequest)
+	} else if len(message.Recipient) < 1 {
+		return ReturnErrorToUser(RecipientMissing, http.StatusBadRequest)
+	}else if len(message.Subject) < 1 {
+		return ReturnErrorToUser(SubjectMissing, http.StatusBadRequest)
+	}else if len(message.Text) < 1 {
+		return ReturnErrorToUser(TextMissing, http.StatusBadRequest)
+	}else if len(message.HTML) < 1 {
+		return ReturnErrorToUser(HTMLMissing, http.StatusBadRequest)
 	}
 
 	emailParams := &ses.SendEmailInput{
 		Message: &ses.Message{
 			Body: &ses.Body{
 				Text: &ses.Content{
-					Data:aws.String(message.Message + "\n From: " + message.Name + " - " + message.Email),
+					Data:aws.String(message.Text),
+				},
+				Html: &ses.Content{
+					Data:aws.String(message.HTML),
 				},
 			},
 			Subject: &ses.Content{
-				Data:aws.String(subject),
+				Data:aws.String(message.Subject),
 			},
 		},
 		Destination: &ses.Destination{
-			ToAddresses:[]*string{aws.String(toEmail)},
+			ToAddresses:[]*string{aws.String(message.Recipient)},
 		},
-		Source:aws.String(toEmail),
+		Source:aws.String(message.Sender),
 	}
 
 	_, err = emailClient.SendEmail(emailParams)
@@ -101,7 +101,7 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		return ReturnErrorToUser(err, http.StatusInternalServerError)
 	}
 
-	successResponse, err := json.Marshal(ResponseMessage{Success, "Message is sent"})
+	successResponse, err := json.Marshal(ResponseMessage{"success", "Message is sent"})
 	return events.APIGatewayProxyResponse{
 		Body: string(successResponse),
 		StatusCode: 200,
